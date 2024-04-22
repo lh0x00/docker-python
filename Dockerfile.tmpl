@@ -62,6 +62,7 @@ ENV KMP_SETTINGS=false
 ENV PIP_ROOT_USER_ACTION=ignore
 
 ADD clean-layer.sh  /tmp/clean-layer.sh
+ADD patches/keras_patch.sh  /tmp/keras_patch.sh
 ADD patches/nbconvert-extensions.tpl /opt/kaggle/nbconvert-extensions.tpl
 ADD patches/template_conf.json /opt/kaggle/conf.json
 
@@ -189,34 +190,50 @@ RUN JAXVER=$(pip freeze | grep -e "^jax==") && \
     pip install --upgrade \
         "matplotlib<3.8.0" \
         seaborn \
-        python-dateutil dask igraph \
-        pyyaml joblib husl geopy mne pyshp \
+        python-dateutil dask dask-expr igraph \
+        pyyaml joblib geopy mne pyshp \
         pandas \
         polars \
         flax \
         "${JAXVER}" && \
     /tmp/clean-layer.sh
 
-RUN apt-get install -y default-jre && \
+RUN apt-get update && \
+    apt-get install -y default-jre && \
     /tmp/clean-layer.sh
 
 RUN pip install -f http://h2o-release.s3.amazonaws.com/h2o/latest_stable_Py.html h2o && /tmp/clean-layer.sh
 
+# b/318672158 Use simply tensorflow-probability once > 0.23.0 is released.
 RUN pip install \
         "tensorflow==${TENSORFLOW_VERSION}" \
         "tensorflow-io==${TENSORFLOW_IO_VERSION}" \
-        tensorflow_decision_forests \
+        git+https://github.com/tensorflow/probability.git@fbc5ebe9b1d343113fb917010096cfd88b32eecf \
         tensorflow_text \
-        tensorflowjs \
-        tensorflow_hub && \
+        "tensorflow_hub>=0.16.0" \
+        # b/331799280 remove once other packages over to dm-tre
+        optree \
+        tf-keras && \
     /tmp/clean-layer.sh
 
-# TODO(b/318672158): Upgrade to Keras 3 once compatible with other TF libries.
-# See blockers here: https://b.corp.google.com/issues/319722433#comment8
-RUN pip install keras keras-cv keras-nlp && \
+# b/318672158 Use simply tensorflow_decision_forests on next release, expected with tf 2.16
+RUN pip install tensorflow_decision_forests==1.8.1 --no-deps && \
     /tmp/clean-layer.sh
 
-RUN pip install pysal
+RUN chmod +x /tmp/keras_patch.sh && \
+    /tmp/keras_patch.sh
+
+ADD patches/keras_internal.py /opt/conda/lib/python3.10/site-packages/tensorflow_decision_forests/keras/keras_internal.py
+ADD patches/keras_internal_test.py /opt/conda/lib/python3.10/site-packages/tensorflow_decision_forests/keras/keras_internal_test.py
+
+# Remove "--no-deps" flag and "namex" package once Keras 3.* is included in our base image.
+# We ignore dependencies since tf2.15 and Keras 3.* should work despite pip saying it won't.
+# Currently, keras tries to install a nightly version of tf 2.16: https://github.com/keras-team/keras/blob/fe2f54aa5bc42fb23a96449cf90434ab9bb6a2cd/requirements.txt#L2
+RUN pip install --no-deps "keras>3" keras-cv keras-nlp namex && \
+    /tmp/clean-layer.sh
+
+# b/328788268 libpysal 4.10 seems to fail with "module 'shapely' has no attribute 'Geometry'. Did you mean: 'geometry'"
+RUN pip install pysal "libpysal==4.9.2"
 
 RUN apt-get install -y libfreetype6-dev && \
     apt-get install -y libglib2.0-0 libxext6 libsm6 libxrender1 libfontconfig1 --fix-missing && \
@@ -225,7 +242,6 @@ RUN apt-get install -y libfreetype6-dev && \
         wordcloud \
         xgboost \
         pydot \
-        python-Levenshtein \
         hep_ml && \
     # NLTK Project datasets
     mkdir -p /usr/share/nltk_data && \
@@ -254,21 +270,17 @@ RUN apt-get install -y libfreetype6-dev && \
 RUN pip install opencv-contrib-python opencv-python && \
     /tmp/clean-layer.sh
 
-RUN pip install scipy \
-        # b/302136621 Fix eli5 import for learntools
-        "scikit-learn<1.3" \
+# Pin scipy until we update JAX b/335003097
+RUN pip install scipy==1.12.0 \
         # Scikit-learn accelerated library for x86
         scikit-learn-intelex>=2023.0.1 \
         # HDF5 support
         h5py \
-        biopython \
         # PUDB, for local debugging convenience
         pudb \
         imbalanced-learn \
         # Profiling and other utilities
         line_profiler \
-        orderedmultidict \
-        smhasher \
         bokeh \
         numba \
         datashader \
@@ -297,14 +309,13 @@ RUN pip install mpld3 \
         arrow \
         nilearn \
         nibabel \
-        pronouncing \
-        markovify \
         imgaug \
         preprocessing \
         path.py \
         Geohash && \
     pip install deap \
-        tpot \
+        # b/302136621 Fix eli5 import for learntools, newer version require scikit-learn > 1.3
+        "tpot==0.12.1" \
         scikit-optimize \
         haversine \
         toolz cytoolz \
@@ -312,9 +323,6 @@ RUN pip install mpld3 \
         hyperopt \
         fitter \
         langid \
-        # Delorean. Useful for dealing with datetime
-        delorean \
-        trueskill \
         # Useful data exploration libraries (for missing data and generating reports)
         missingno \
         pandas-profiling \
@@ -337,9 +345,7 @@ RUN pip install mpld3 \
         wavio \
         SimpleITK \
         hmmlearn \
-        bayespy \
         gplearn \
-        PyAstronomy \
         squarify \
         fuzzywuzzy \
         python-louvain \
@@ -369,30 +375,23 @@ RUN pip install mpld3 \
         kaggle \
         kagglehub \
         google-generativeai \
-        mock \
         pytest && \
     /tmp/clean-layer.sh
 
 RUN rm -rf /opt/conda/lib/python3.10/site-packages/numpy-1.23.5.dist-info*
-RUN pip install tensorpack && \
-    # Add google PAIR-code Facets
-    cd /opt/ && git clone https://github.com/PAIR-code/facets && cd facets/ && jupyter nbextension install facets-dist/ --user && \
+ # Add google PAIR-code Facets
+RUN cd /opt/ && git clone https://github.com/PAIR-code/facets && cd facets/ && jupyter nbextension install facets-dist/ --user && \
     export PYTHONPATH=$PYTHONPATH:/opt/facets/facets_overview/python/ && \
     pip install kmodes --no-dependencies && \
     pip install librosa \
         polyglot \
-        mmh3 \
-        fbpca \
         sentencepiece \
         cufflinks \
         lime \
         memory_profiler && \
     /tmp/clean-layer.sh
 
-# install cython & cysignals before pyfasttext
 RUN pip install cython \
-        cysignals \
-        pyfasttext \
         fasttext && \
     apt-get install -y libhunspell-dev && pip install hunspell
 RUN pip install annoy \
@@ -516,26 +515,27 @@ RUN pip install flashtext \
         # b/214080882 blake3 0.3.0 is not compatible with vaex.
         blake3==0.2.1 \
         vaex \
-        marisa-trie \
         pyemd \
         pyupset \
         pympler \
-        s3fs \
         featuretools \
         #-e git+https://github.com/SohierDane/BigQuery_Helper#egg=bq_helper \
-        hpsklearn \
         git+https://github.com/Kaggle/learntools \
-        kmapper \
-        shap \
         ray \
         gym \
         pyarabic \
         pandasql \
+	# b/302136621 Fix eli5 import for learntools
+        scikit-learn==1.2.2 \
+	hpsklearn \
+        kmapper \
+	# b/329869023 shap 0.45.0 breaks learntools
+        shap==0.44.1 \
+        cesium \
+        rgf_python \
         jieba  \
         # ggplot is broken and main repo does not merge and release https://github.com/yhat/ggpy/pull/668
         https://github.com/hbasria/ggpy/archive/0.11.5.zip \
-        cesium \
-        rgf_python \
         tsfresh \
         pykalman \
         optuna \
@@ -553,8 +553,9 @@ RUN pip install pytorch-ignite \
         bqplot \
         earthengine-api \
         transformers \
-        # b/232247930 >= 2.2.0 requires pyarrow >= 6.0.0 which conflicts with dependencies for rapidsai 0.21.*
-        datasets==2.1.0 \
+        datasets \
+        s3fs \
+        gcsfs \
         kaggle-environments \
         geopandas \
         "shapely<2" \
@@ -598,8 +599,7 @@ RUN apt-get install tesseract-ocr -y && \
     pip install pytesseract \
         wand \
         pdf2image \
-        PyPDF \
-        pyocr && \
+        PyPDF && \
     /tmp/clean-layer.sh
 ENV TESSERACT_PATH=/usr/bin/tesseract
 
@@ -620,8 +620,8 @@ RUN pip install --upgrade dask && \
     mkdir -p /etc/ipython/ && echo "c = get_config(); c.IPKernelApp.matplotlib = 'inline'" > /etc/ipython/ipython_config.py && \
     # Temporary patch for broken libpixman 0.38 in conda-forge, symlink to system libpixman 0.34 untile conda package gets updated to 0.38.5 or higher.
     ln -sf /usr/lib/x86_64-linux-gnu/libpixman-1.so.0.34.0 /opt/conda/lib/libpixman-1.so.0.38.0 && \
-    # upgrade jupyter-server to version > 2.x
-    pip install --force-reinstall --no-deps jupyter_server>=2.* && \
+    # pin jupyter-server to version 2.12.5; later versions break LSP (b/333854354)
+    pip install --force-reinstall --no-deps jupyter_server==2.12.5 && \
     /tmp/clean-layer.sh
 
 # Fix to import bq_helper library without downgrading setuptools

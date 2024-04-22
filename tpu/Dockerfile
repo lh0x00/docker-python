@@ -38,6 +38,11 @@ ADD patches/kaggle_datasets.py /root/.local/lib/${PYTHON_VERSION_PATH}/site-pack
 # sitecustomize adds significant latency to ipython kernel startup and should only be added if needed
 # ADD patches/sitecustomize.py /root/.local/lib/${PYTHON_VERSION_PATH}/site-packages/sitecustomize.py
 
+# Prereqs
+# This is needed for cv2 (opencv-python):
+# https://stackoverflow.com/questions/55313610/importerror-libgl-so-1-cannot-open-shared-object-file-no-such-file-or-directo
+RUN apt-get update && apt-get install ffmpeg libsm6 libxext6  -y
+
 # Install all the packages together for maximum compatibility.
 
 # Install Tensorflow.
@@ -55,10 +60,11 @@ ADD patches/kaggle_datasets.py /root/.local/lib/${PYTHON_VERSION_PATH}/site-pack
 # Additional useful packages should be added here
 
 RUN pip install tensorflow_hub https://storage.googleapis.com/cloud-tpu-tpuvm-artifacts/tensorflow/tf-${TENSORFLOW_VERSION}/tensorflow-${TENSORFLOW_VERSION}-${PYTHON_WHEEL_VERSION}-${PYTHON_WHEEL_VERSION}-${TF_LINUX_WHEEL_VERSION}.whl tensorflow-probability tensorflow-io \
-    torch==${TORCH_VERSION} https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-${TORCH_VERSION}+libtpu-${PYTHON_WHEEL_VERSION}-${PYTHON_WHEEL_VERSION}-${TORCH_LINUX_WHEEL_VERSION}.whl torchvision==${TORCHVISION_VERSION} torchtext==${TORCHTEXT_VERSION} torchaudio==${TORCHAUDIO_VERSION} \
+    torch~=${TORCH_VERSION} https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-${TORCH_VERSION}+libtpu-${PYTHON_WHEEL_VERSION}-${PYTHON_WHEEL_VERSION}-${TORCH_LINUX_WHEEL_VERSION}.whl torchvision==${TORCHVISION_VERSION} torchtext==${TORCHTEXT_VERSION} torchaudio==${TORCHAUDIO_VERSION} \
     jax[tpu]==${JAX_VERSION} -f https://storage.googleapis.com/jax-releases/libtpu_releases.html trax flax optax git+https://github.com/deepmind/dm-haiku jraph distrax \
     papermill jupyterlab python-lsp-server[all] "jupyter-lsp==1.5.1" \
     pandas matplotlib opencv-python-headless librosa accelerate diffusers scikit-learn transformers \
+    seaborn timm albumentations einops pyarrow fastparquet opencv-python \
     kagglehub && \
     /tmp/clean-layer.sh
 
